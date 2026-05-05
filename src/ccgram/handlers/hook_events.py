@@ -13,7 +13,11 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 
-from ..claude_task_state import IDLE_STATUS_TEXT, classify_wait_message, claude_task_state
+from ..claude_task_state import (
+    IDLE_STATUS_TEXT,
+    classify_wait_message,
+    claude_task_state,
+)
 from ..providers.base import HookEvent
 from ..session_lifecycle import session_lifecycle
 from ..telegram_client import TelegramClient
@@ -107,6 +111,13 @@ async def _handle_notification(event: HookEvent, client: TelegramClient) -> None
         tool_name,
         event.window_key,
     )
+
+    # ExitPlanMode: skip the Notification-hook interactive UI so the transcript
+    # reader delivers the plan text first (via queue.join()) before the approval
+    # prompt. The transcript path emits plan text → tool_use in the right order.
+    if tool_name == "ExitPlanMode":
+        return
+
     wait_header = classify_wait_message(event.data.get("message", ""))
 
     for user_id, thread_id, window_id in users:
@@ -203,7 +214,9 @@ async def _handle_stop(event: HookEvent, client: TelegramClient) -> None:
                 window_id, num_turns=num_turns
             )
             if summary and completion_text:
-                status_text = completion_text.replace(IDLE_STATUS_TEXT, f"✓ Done — {summary}", 1)
+                status_text = completion_text.replace(
+                    IDLE_STATUS_TEXT, f"✓ Done — {summary}", 1
+                )
             elif completion_text == IDLE_STATUS_TEXT:
                 status_text = None  # suppress bare ✓ Ready (no tasks, no summary)
             else:
