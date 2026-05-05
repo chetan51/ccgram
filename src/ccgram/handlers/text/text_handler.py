@@ -46,6 +46,8 @@ from ..recovery.recovery_banner import RecoveryBanner, render_banner
 from ..polling.polling_state import lifecycle_strategy
 from ...topic_state_registry import topic_state
 from ..user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT, RECOVERY_WINDOW_ID
+from ..topics.directory_callbacks import create_window_for_topic
+from ...dir_config import get_default_dir_config
 from ... import window_query
 from ...thread_router import thread_router
 from ...providers import get_provider_for_window
@@ -191,6 +193,7 @@ async def _handle_unbound_topic(
     text: str,
     user_data: dict | None,
     message: Message,
+    context: "ContextTypes.DEFAULT_TYPE | None" = None,
 ) -> bool:
     """Show window picker or directory browser for an unbound topic.
 
@@ -233,7 +236,34 @@ async def _handle_unbound_topic(
         await safe_reply(message, PENDING_DELIVERY_NOTICE)
         return True
 
-    # No unbound windows — show directory browser to create a new session
+    # No unbound windows — check for a default dir config before showing the browser.
+    if context is not None:
+        default_cfg = get_default_dir_config()
+        if default_cfg is not None and default_cfg.path:
+            logger.info(
+                "Unbound topic: auto-creating window at %s provider=%s (user=%d, thread=%d)",
+                default_cfg.path,
+                default_cfg.provider,
+                user_id,
+                thread_id,
+            )
+            success, status = await create_window_for_topic(
+                user_id,
+                thread_id,
+                default_cfg.path,
+                default_cfg.provider,
+                "normal",
+                context.bot,
+                pending_text=text,
+                init_command=default_cfg.init_command,
+            )
+            if success:
+                await safe_reply(message, f"✅ {status}\n\nBound to this topic. Send messages here.")
+            else:
+                await safe_reply(message, f"❌ {status}")
+            return True
+
+    # Fall back to directory browser.
     logger.info(
         "Unbound topic: showing directory browser (user=%d, thread=%d)",
         user_id,
@@ -436,7 +466,7 @@ async def handle_text_message(
 
     # Unbound topic — show picker or browser
     if await _handle_unbound_topic(
-        user.id, thread_id, text, context.user_data, message
+        user.id, thread_id, text, context.user_data, message, context
     ):
         return
 

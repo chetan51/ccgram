@@ -30,7 +30,9 @@ _CONFIG_FILE = Path("~/.ccgram/dir-configs.toml")
 class DirConfig:
     provider: str = "shell"
     auto: bool = False
+    default: bool = False
     init_command: str = ""
+    path: str = ""
 
 
 def _load_raw() -> dict:
@@ -65,6 +67,27 @@ def get_dir_config(directory: str) -> DirConfig | None:
             return DirConfig(
                 provider=str(settings.get("provider", "shell")),
                 auto=bool(settings.get("auto", False)),
+                default=bool(settings.get("default", False)),
                 init_command=str(settings.get("init_command", "")),
+                path=str(candidate),
+            )
+    return None
+
+
+def get_default_dir_config() -> DirConfig | None:
+    """Return the first dir config with ``default = true``, or ``None``."""
+    raw = _load_raw()
+    dirs: dict = raw.get("dirs", {})
+    for raw_path, settings in dirs.items():
+        if not isinstance(settings, dict):
+            continue
+        if settings.get("default"):
+            expanded = str(Path(raw_path).expanduser())
+            return DirConfig(
+                provider=str(settings.get("provider", "shell")),
+                auto=bool(settings.get("auto", False)),
+                default=True,
+                init_command=str(settings.get("init_command", "")),
+                path=expanded,
             )
     return None

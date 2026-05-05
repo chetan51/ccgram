@@ -550,39 +550,39 @@ def _try_install_messaging_skill(provider_name: str, cwd: str) -> None:
         logger.exception("Failed to install messaging skill at %s", cwd)
 
 
-async def _create_window_and_bind(
-    query: CallbackQuery,
+async def create_window_for_topic(
     user_id: int,
+    thread_id: int | None,
     selected_path: str,
     provider_name: str,
     approval_mode: str,
-    context: ContextTypes.DEFAULT_TYPE,
+    bot: object,
     *,
+    pending_text: str = "",
     init_command: str = "",
-) -> None:
-    """Create a tmux window, bind to the pending topic, and forward pending text.
+) -> tuple[bool, str]:
+    """Create a tmux window, bind it to a Telegram topic, and forward pending text.
 
-    Shared by _handle_mode_select (after mode picker) and _handle_provider_select
-    (when mode picker is skipped for providers without YOLO flags).
+    Public entry point used by both the directory-browser callback flow and the
+    auto-create path in the text handler. Returns ``(success, status_message)``
+    where *status_message* is suitable for display to the user (without an
+    emoji prefix — callers add ✅/❌).
+
+    ``thread_id=None`` means there is no topic to bind to (no rename, no
+    pending-text forward).  ``pending_text`` is forwarded to the new window
+    after it is created and set up.  ``init_command`` is sent to shell windows
+    after prompt setup.
     """
     # Lazy: providers package heavy bootstrap
     from ccgram.providers import resolve_launch_command
 
-    pending_thread_id: int | None = (
-        context.user_data.get(PENDING_THREAD_ID) if context.user_data else None
-    )
-
     launch_command = resolve_launch_command(provider_name, approval_mode=approval_mode)
 
-    success, message, created_wname, created_wid = await tmux_manager.create_window(
+    success, status, created_wname, created_wid = await tmux_manager.create_window(
         selected_path, launch_command=launch_command
     )
     if not success:
-        await safe_edit(query, f"❌ {message}")
-        if pending_thread_id is not None and context.user_data is not None:
-            context.user_data.pop(PENDING_THREAD_ID, None)
-            context.user_data.pop(PENDING_THREAD_TEXT, None)
-        return
+        return False, status
 
     user_preferences.update_user_mru(user_id, selected_path)
     session_manager.set_window_origin(created_wid, CCGRAM_CREATED_WINDOW_ORIGIN)
@@ -597,7 +597,7 @@ async def _create_window_and_bind(
         provider_name,
         approval_mode,
         user_id,
-        pending_thread_id,
+        thread_id,
     )
     await tmux_manager.stamp_pane_title(created_wid, provider_name)
 
@@ -613,14 +613,8 @@ async def _create_window_and_bind(
 
     _try_install_messaging_skill(provider_name, selected_path)
 
-    if pending_thread_id is not None:
-        thread_router.bind_thread(
-            user_id, pending_thread_id, created_wid, window_name=created_wname
-        )
-        query_message = query.message
-        chat = query_message.chat if query_message else None
-        if chat and chat.type in ("group", "supergroup"):
-            thread_router.set_group_chat_id(user_id, pending_thread_id, chat.id)
+    if thread_id is not None:
+        thread_router.bind_thread(user_id, thread_id, created_wid, window_name=created_wname)
 
     provider = provider_registry.get(provider_name)
     if approval_mode == "yolo" and provider.capabilities.has_yolo_confirmation:
@@ -629,38 +623,22 @@ async def _create_window_and_bind(
     if provider.capabilities.supports_hook:
         await session_map_sync.wait_for_session_map_entry(created_wid)
 
-    if pending_thread_id is None:
-        await safe_edit(query, f"✅ {message}")
-        return
+    if thread_id is not None:
+        try:
+            await bot.edit_forum_topic(  # type: ignore[attr-defined]
+                chat_id=thread_router.resolve_chat_id(user_id, thread_id),
+                message_thread_id=thread_id,
+                name=format_topic_name_for_mode(created_wname, approval_mode),
+            )
+        except TelegramError as e:
+            logger.debug("Failed to rename topic: %s", e)
 
-    try:
-        await context.bot.edit_forum_topic(
-            chat_id=thread_router.resolve_chat_id(user_id, pending_thread_id),
-            message_thread_id=pending_thread_id,
-            name=format_topic_name_for_mode(created_wname, approval_mode),
-        )
-    except TelegramError as e:
-        logger.debug("Failed to rename topic: %s", e)
-
-    await safe_edit(
-        query,
-        f"✅ {message}\n\nBound to this topic. Send messages here.",
-    )
-
-    pending_text = (
-        context.user_data.get(PENDING_THREAD_TEXT) if context.user_data else None
-    )
-    if pending_text:
+    if pending_text and thread_id is not None:
         logger.debug(
             "Forwarding pending text to window %s (len=%d)",
             created_wname,
             len(pending_text),
         )
-        if context.user_data is not None:
-            context.user_data.pop(PENDING_THREAD_TEXT, None)
-            context.user_data.pop(PENDING_THREAD_ID, None)
-
-        # Chat-first providers (shell): route through NL→command approval flow
         if provider_caps.chat_first_command_path:
             # Lazy: telegram_client wraps PTB Bot; shell.shell_commands
             # ↔ topics cycle through approval callback wiring.
@@ -670,9 +648,9 @@ async def _create_window_and_bind(
             from ..shell.shell_commands import handle_shell_message
 
             await handle_shell_message(
-                PTBTelegramClient(context.bot),
+                PTBTelegramClient(bot),  # type: ignore[arg-type]
                 user_id,
-                pending_thread_id,
+                thread_id,
                 created_wid,
                 pending_text,
             )
@@ -680,17 +658,69 @@ async def _create_window_and_bind(
             send_ok, send_msg = await send_to_window(created_wid, pending_text)
             if not send_ok:
                 logger.warning("Failed to forward pending text: %s", send_msg)
-                # Lazy: telegram_client wraps PTB Bot.
                 from ...telegram_client import PTBTelegramClient
 
                 await safe_send(
-                    PTBTelegramClient(context.bot),
-                    thread_router.resolve_chat_id(user_id, pending_thread_id),
+                    PTBTelegramClient(bot),  # type: ignore[arg-type]
+                    thread_router.resolve_chat_id(user_id, thread_id),
                     f"❌ Failed to send pending message: {send_msg}",
-                    message_thread_id=pending_thread_id,
+                    message_thread_id=thread_id,
                 )
-    elif context.user_data is not None:
+
+    return True, status
+
+
+async def _create_window_and_bind(
+    query: CallbackQuery,
+    user_id: int,
+    selected_path: str,
+    provider_name: str,
+    approval_mode: str,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    init_command: str = "",
+) -> None:
+    """Create a tmux window, bind to the pending topic, and forward pending text.
+
+    Shared by _handle_mode_select (after mode picker) and _handle_provider_select
+    (when mode picker is skipped for providers without YOLO flags).
+    """
+    pending_thread_id: int | None = (
+        context.user_data.get(PENDING_THREAD_ID) if context.user_data else None
+    )
+    pending_text: str = (
+        context.user_data.get(PENDING_THREAD_TEXT, "") if context.user_data else ""
+    )
+
+    # Register the group chat_id so resolve_chat_id works inside create_window_for_topic.
+    query_message = query.message
+    chat = query_message.chat if query_message else None
+    if chat and chat.type in ("group", "supergroup") and pending_thread_id is not None:
+        thread_router.set_group_chat_id(user_id, pending_thread_id, chat.id)
+
+    success, status = await create_window_for_topic(
+        user_id,
+        pending_thread_id,
+        selected_path,
+        provider_name,
+        approval_mode,
+        context.bot,
+        pending_text=pending_text,
+        init_command=init_command,
+    )
+
+    if context.user_data is not None:
+        context.user_data.pop(PENDING_THREAD_TEXT, None)
         context.user_data.pop(PENDING_THREAD_ID, None)
+
+    if not success:
+        await safe_edit(query, f"❌ {status}")
+        return
+
+    if pending_thread_id is None:
+        await safe_edit(query, f"✅ {status}")
+    else:
+        await safe_edit(query, f"✅ {status}\n\nBound to this topic. Send messages here.")
 
 
 async def _handle_mode_select(
