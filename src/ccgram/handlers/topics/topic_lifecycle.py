@@ -183,21 +183,26 @@ async def prune_stale_state(live_windows: "list[TmuxWindow]") -> None:
 
 
 async def probe_topic_existence(client: TelegramClient) -> None:
-    """Probe all bound topics via Telegram API; detect deleted topics."""
+    """Probe all bound topics via Telegram API; detect deleted topics.
+
+    Uses send_message + delete_message rather than unpin_all_forum_topic_messages
+    because unpin silently returns True for deleted topics (nothing to unpin),
+    while send_message raises BadRequest("Message thread not found") for them.
+    """
     for user_id, thread_id, wid in list(thread_router.iter_thread_bindings()):
         if lifecycle_strategy.should_skip_probe(wid):
             continue
+        chat_id = thread_router.resolve_chat_id(user_id, thread_id)
         try:
-            await client.unpin_all_forum_topic_messages(
-                chat_id=thread_router.resolve_chat_id(user_id, thread_id),
+            msg = await client.send_message(
+                chat_id,
+                "​",
                 message_thread_id=thread_id,
             )
+            await _delete_probe_message(client, chat_id, msg.message_id)
             terminal_poll_state.reset_probe_failures(wid)
         except TelegramError as e:
-            if isinstance(e, BadRequest) and (
-                "Topic_id_invalid" in e.message
-                or "thread not found" in e.message.lower()
-            ):
+            if is_thread_gone(e):
                 w = await tmux_manager.find_window_by_id(wid)
                 view = window_query.view_window(wid)
                 killed = False
@@ -225,6 +230,15 @@ async def probe_topic_existence(client: TelegramClient) -> None:
                         wid,
                         e,
                     )
+
+
+async def _delete_probe_message(
+    client: TelegramClient, chat_id: int, message_id: int
+) -> None:
+    try:
+        await client.delete_message(chat_id, message_id)
+    except TelegramError:
+        pass
 
 
 # ------------------------------------------------------------------

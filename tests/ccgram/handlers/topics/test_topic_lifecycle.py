@@ -161,8 +161,8 @@ class TestPruneStaleState:
 class TestProbeTopicExistence:
     async def test_deleted_topic_unbinds(self):
         bot = AsyncMock(spec=Bot)
-        bot.unpin_all_forum_topic_messages = AsyncMock(
-            side_effect=BadRequest("Topic_id_invalid")
+        bot.send_message = AsyncMock(
+            side_effect=BadRequest("Message thread not found")
         )
         with (
             patch(
@@ -186,6 +186,48 @@ class TestProbeTopicExistence:
             mock_router.unbind_thread.assert_called_once_with(1, 100)
             mock_tmux.kill_window.assert_not_called()
 
+    async def test_deleted_topic_kills_ccgram_created_window(self):
+        bot = AsyncMock(spec=Bot)
+        bot.send_message = AsyncMock(
+            side_effect=BadRequest("Message thread not found")
+        )
+        with (
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.thread_router"
+            ) as mock_router,
+            patch("ccgram.handlers.topics.topic_lifecycle.tmux_manager") as mock_tmux,
+            patch("ccgram.handlers.topics.topic_lifecycle.window_query") as mock_wq,
+            patch(
+                "ccgram.handlers.topics.topic_lifecycle.clear_topic_state",
+                new_callable=AsyncMock,
+            ),
+        ):
+            mock_router.iter_thread_bindings.return_value = [(1, 100, "@0")]
+            mock_router.resolve_chat_id.return_value = 42
+            mock_tmux.find_window_by_id = AsyncMock(
+                return_value=MagicMock(window_id="@0")
+            )
+            mock_wq.view_window.return_value = _window_view("ccgram_created")
+            mock_tmux.kill_window = AsyncMock()
+            await probe_topic_existence(bot)
+            mock_router.unbind_thread.assert_called_once_with(1, 100)
+            mock_tmux.kill_window.assert_called_once_with("@0")
+
+    async def test_alive_topic_sends_and_deletes_probe_message(self):
+        fake_msg = MagicMock()
+        fake_msg.message_id = 999
+        bot = AsyncMock(spec=Bot)
+        bot.send_message = AsyncMock(return_value=fake_msg)
+        bot.delete_message = AsyncMock()
+        with patch(
+            "ccgram.handlers.topics.topic_lifecycle.thread_router"
+        ) as mock_router:
+            mock_router.iter_thread_bindings.return_value = [(1, 100, "@0")]
+            mock_router.resolve_chat_id.return_value = 42
+            await probe_topic_existence(bot)
+            bot.send_message.assert_called_once()
+            bot.delete_message.assert_called_once_with(42, 999)
+
     async def test_suspended_probe_skipped(self):
         bot = AsyncMock(spec=Bot)
         ws = terminal_poll_state.get_state("@0")
@@ -195,4 +237,4 @@ class TestProbeTopicExistence:
         ) as mock_router:
             mock_router.iter_thread_bindings.return_value = [(1, 100, "@0")]
             await probe_topic_existence(bot)
-        bot.unpin_all_forum_topic_messages.assert_not_called()
+        bot.send_message.assert_not_called()
