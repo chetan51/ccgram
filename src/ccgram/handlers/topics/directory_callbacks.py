@@ -601,6 +601,12 @@ async def create_window_for_topic(
     )
     await tmux_manager.stamp_pane_title(created_wid, provider_name)
 
+    # Bind early — before any async shell setup — so the polling loop's
+    # _is_window_already_bound check returns True and handle_new_window
+    # does not race us to auto-create a duplicate Telegram topic.
+    if thread_id is not None:
+        thread_router.bind_thread(user_id, thread_id, created_wid, window_name=created_wname)
+
     provider_caps = provider_registry.get(provider_name).capabilities
     if provider_caps.chat_first_command_path:
         # Lazy: shell ↔ topics cycle via window_callbacks adoption flow.
@@ -612,9 +618,6 @@ async def create_window_for_topic(
             await tmux_manager.send_keys(created_wid, init_command, raw=True)
 
     _try_install_messaging_skill(provider_name, selected_path)
-
-    if thread_id is not None:
-        thread_router.bind_thread(user_id, thread_id, created_wid, window_name=created_wname)
 
     provider = provider_registry.get(provider_name)
     if approval_mode == "yolo" and provider.capabilities.has_yolo_confirmation:
