@@ -249,7 +249,8 @@ async def _is_interactive_shell(window_id: str) -> bool:
         return False
 
     tokens = args.split()
-    return len(tokens) == 1
+    # idle shell with no args, or login shell started via "zsh -l" / "bash -l"
+    return len(tokens) == 1 or (len(tokens) == 2 and tokens[1] == "-l")
 
 
 async def setup_shell_prompt(

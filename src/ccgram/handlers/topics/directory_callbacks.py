@@ -493,8 +493,14 @@ def _parse_mode_select(data: str) -> tuple[str, str] | None:
     return provider_name, approval_mode.lower()
 
 
-async def _wait_for_shell_ready(window_id: str, *, attempts: int = 5) -> None:
-    """Wait for a freshly created tmux window to show a shell prompt."""
+async def _wait_for_shell_ready(window_id: str, *, attempts: int = 15) -> None:
+    """Wait for a freshly created tmux window to show a shell prompt.
+
+    Login shells (zsh -l) source /etc/zprofile, ~/.zprofile, and ~/.zshrc on
+    startup, which can take 500ms–2s on macOS with Homebrew/nvm/pyenv.  The
+    default 15 × 0.2s = 3s budget covers heavy profiles without blocking fast
+    ones.
+    """
     # Lazy: only needed inside the shell-detection branch
     import os
 
