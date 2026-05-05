@@ -18,6 +18,7 @@ Module-level: _vim_state cache, _vim_locks for per-window send serialization.
 import asyncio
 import contextlib
 import fnmatch
+import os
 import re
 import shlex
 import structlog
@@ -1109,10 +1110,14 @@ class TmuxManager:
         def _create_and_start() -> tuple[bool, str, str, str]:
             session = self.get_or_create_session()
             try:
-                # Create new window
+                # Create new window with a login shell so the environment
+                # matches what the user gets opening a terminal on macOS
+                # (sources /etc/zprofile, ~/.zprofile, and ~/.zshrc).
+                login_shell = os.environ.get("SHELL", "/bin/zsh")
                 window = session.new_window(
                     window_name=final_window_name,
                     start_directory=str(path),
+                    window_shell=f"{login_shell} -l",
                 )
 
                 new_window_id = window.window_id or ""
