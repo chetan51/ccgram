@@ -27,9 +27,9 @@ def _validate_positive_float(
     return value
 
 
-def _validate_non_negative_int(
-    _ctx: click.Context, _param: click.Parameter, value: int | None
-) -> int | None:
+def _validate_non_negative_float(
+    _ctx: click.Context, _param: click.Parameter, value: float | None
+) -> float | None:
     if value is not None and value < 0:
         raise click.BadParameter("must be non-negative")
     return value
@@ -154,17 +154,17 @@ def apply_args_to_env(**kwargs: object) -> None:
 )
 @click.option(
     "--autoclose-done",
-    type=int,
+    type=float,
     default=None,
-    callback=_validate_non_negative_int,
+    callback=_validate_non_negative_float,
     envvar="AUTOCLOSE_DONE_MINUTES",
     help="Auto-close done topics after N minutes (default: 30, 0=disabled).",
 )
 @click.option(
     "--autoclose-dead",
-    type=int,
+    type=float,
     default=None,
-    callback=_validate_non_negative_int,
+    callback=_validate_non_negative_float,
     envvar="AUTOCLOSE_DEAD_MINUTES",
     help="Auto-close dead sessions after N minutes (default: 10, 0=disabled).",
 )
