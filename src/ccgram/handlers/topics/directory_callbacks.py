@@ -58,6 +58,7 @@ from ..callback_registry import register
 from ..messaging_pipeline.message_sender import safe_edit, safe_send
 from ..status.topic_emoji import format_topic_name_for_mode
 from ..user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT
+from ...dir_config import get_dir_config
 
 if TYPE_CHECKING:
     from telegram.ext import ContextTypes
@@ -381,6 +382,21 @@ async def _handle_confirm(
             )
             return
 
+    # If the directory has an auto config, skip the provider/mode pickers entirely.
+    dir_cfg = get_dir_config(selected_path)
+    if dir_cfg and dir_cfg.auto:
+        clear_browse_state(context.user_data)
+        await _create_window_and_bind(
+            query,
+            user_id,
+            selected_path,
+            dir_cfg.provider,
+            "normal",
+            context,
+            init_command=dir_cfg.init_command,
+        )
+        return
+
     # Show provider selection keyboard (keep browse state for _handle_provider_select)
     text, keyboard = build_provider_picker(selected_path)
     await safe_edit(query, text, reply_markup=keyboard)
@@ -541,6 +557,8 @@ async def _create_window_and_bind(
     provider_name: str,
     approval_mode: str,
     context: ContextTypes.DEFAULT_TYPE,
+    *,
+    init_command: str = "",
 ) -> None:
     """Create a tmux window, bind to the pending topic, and forward pending text.
 
@@ -590,6 +608,8 @@ async def _create_window_and_bind(
 
         await _wait_for_shell_ready(created_wid)
         await ensure_setup(created_wid, "auto")
+        if init_command:
+            await tmux_manager.send_keys(created_wid, init_command, raw=True)
 
     _try_install_messaging_skill(provider_name, selected_path)
 
