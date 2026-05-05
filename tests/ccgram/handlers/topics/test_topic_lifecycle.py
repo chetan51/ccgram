@@ -161,9 +161,7 @@ class TestPruneStaleState:
 class TestProbeTopicExistence:
     async def test_deleted_topic_unbinds(self):
         bot = AsyncMock(spec=Bot)
-        bot.send_message = AsyncMock(
-            side_effect=BadRequest("Message thread not found")
-        )
+        bot.send_message = AsyncMock(side_effect=BadRequest("Message thread not found"))
         with (
             patch(
                 "ccgram.handlers.topics.topic_lifecycle.thread_router"
@@ -188,9 +186,7 @@ class TestProbeTopicExistence:
 
     async def test_deleted_topic_kills_ccgram_created_window(self):
         bot = AsyncMock(spec=Bot)
-        bot.send_message = AsyncMock(
-            side_effect=BadRequest("Message thread not found")
-        )
+        bot.send_message = AsyncMock(side_effect=BadRequest("Message thread not found"))
         with (
             patch(
                 "ccgram.handlers.topics.topic_lifecycle.thread_router"

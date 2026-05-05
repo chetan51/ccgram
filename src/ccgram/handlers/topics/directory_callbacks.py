@@ -525,6 +525,7 @@ async def _wait_for_shell_prompt(window_id: str, *, timeout: float = 5.0) -> Non
     resets PROMPT back to the user's original form.  Falls through after
     *timeout* seconds so a slow profile never blocks indefinitely.
     """
+    # Lazy: avoids top-level import in a module with heavy PTB/tmux deps
     import re
 
     prompt_re = re.compile(r"[%$❯#]\s*$")
@@ -634,7 +635,9 @@ async def create_window_for_topic(
     # _is_window_already_bound check returns True and handle_new_window
     # does not race us to auto-create a duplicate Telegram topic.
     if thread_id is not None:
-        thread_router.bind_thread(user_id, thread_id, created_wid, window_name=created_wname)
+        thread_router.bind_thread(
+            user_id, thread_id, created_wid, window_name=created_wname
+        )
 
     provider_caps = provider_registry.get(provider_name).capabilities
     if provider_caps.chat_first_command_path:
@@ -691,6 +694,7 @@ async def create_window_for_topic(
             send_ok, send_msg = await send_to_window(created_wid, pending_text)
             if not send_ok:
                 logger.warning("Failed to forward pending text: %s", send_msg)
+                # Lazy: avoids circular import through bootstrap wiring path
                 from ...telegram_client import PTBTelegramClient
 
                 await safe_send(
@@ -753,7 +757,9 @@ async def _create_window_and_bind(
     if pending_thread_id is None:
         await safe_edit(query, f"✅ {status}")
     else:
-        await safe_edit(query, f"✅ {status}\n\nBound to this topic. Send messages here.")
+        await safe_edit(
+            query, f"✅ {status}\n\nBound to this topic. Send messages here."
+        )
 
 
 async def _handle_mode_select(

@@ -110,8 +110,10 @@ async def _transition_to_idle(
     lifecycle_strategy.clear_autoclose_timer(user_id, thread_id)
     lifecycle_strategy.clear_typing_state(user_id, thread_id)
     if notif_mode not in ("muted", "errors_only"):
+        completion_text = claude_task_state.format_completion_text(window_id)
+        status_text = None if completion_text == IDLE_STATUS_TEXT else completion_text
         await enqueue_status_update(
-            client, user_id, window_id, IDLE_STATUS_TEXT, thread_id=thread_id
+            client, user_id, window_id, status_text, thread_id=thread_id
         )
     else:
         await enqueue_status_update(
@@ -268,7 +270,12 @@ async def _check_interactive_only(
 
 
 async def _maybe_check_passive_shell(
-    bot: "Bot", user_id: int, window_id: str, thread_id: int
+    bot: "Bot",
+    user_id: int,
+    window_id: str,
+    thread_id: int,
+    *,
+    pane_current_command: str = "",
 ) -> None:
     if not _get_provider(window_id).capabilities.chat_first_command_path:
         return
@@ -286,7 +293,12 @@ async def _maybe_check_passive_shell(
     from ...shell.shell_capture import check_passive_shell_output
 
     await check_passive_shell_output(
-        PTBTelegramClient(bot), user_id, thread_id, window_id, rendered
+        PTBTelegramClient(bot),
+        user_id,
+        thread_id,
+        window_id,
+        rendered,
+        pane_current_command=pane_current_command,
     )
 
 

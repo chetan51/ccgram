@@ -83,18 +83,23 @@ async def tick_window(
         thread_id=thread_id,
     )
 
+    pane_cmd = window.pane_current_command if window else ""
     queue = get_message_queue(user_id)
     if queue and not queue.empty():
         await _check_interactive_only(
             bot, user_id, window_id, thread_id, _window=window
         )
         await _scan_window_panes(bot, user_id, window_id, thread_id)
-        await _maybe_check_passive_shell(bot, user_id, window_id, thread_id)
+        await _maybe_check_passive_shell(
+            bot, user_id, window_id, thread_id, pane_current_command=pane_cmd
+        )
         return
 
     await _update_status(bot, user_id, window_id, thread_id=thread_id, _window=window)
     await _scan_window_panes(bot, user_id, window_id, thread_id)
-    await _maybe_check_passive_shell(bot, user_id, window_id, thread_id)
+    await _maybe_check_passive_shell(
+        bot, user_id, window_id, thread_id, pane_current_command=pane_cmd
+    )
 
 
 __all__ = [

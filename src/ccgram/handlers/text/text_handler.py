@@ -258,7 +258,9 @@ async def _handle_unbound_topic(
                 init_command=default_cfg.init_command,
             )
             if success:
-                await safe_reply(message, f"✅ {status}\n\nBound to this topic. Send messages here.")
+                await safe_reply(
+                    message, f"✅ {status}\n\nBound to this topic. Send messages here."
+                )
             else:
                 await safe_reply(message, f"❌ {status}")
             return True

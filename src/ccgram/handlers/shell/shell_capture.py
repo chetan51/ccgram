@@ -461,12 +461,44 @@ def _has_markers_in_tail(rendered_text: str) -> bool:
     return any(match_prompt(line.lstrip()) for line in tail)
 
 
+_RELAY_TAIL_LINES = 40
+
+
+async def _relay_raw_output(
+    client: TelegramClient,
+    user_id: int,
+    thread_id: int,
+    window_id: str,
+    state: "_ShellMonitorState",
+    rendered_text: str,
+) -> None:
+    """Relay raw terminal content for interactive programs (e.g. Cursor CLI).
+
+    Used when no prompt markers are present and the foreground process is not
+    a known shell. Sends/edits the tail of the rendered pane text so the user
+    sees the agent's latest output without needing prompt markers.
+    """
+    lines = rendered_text.rstrip().splitlines()
+    if not lines:
+        return
+    tail = "\n".join(lines[-_RELAY_TAIL_LINES:])
+    if tail == state.last_output:
+        return
+    state.last_output = tail
+    chat_id = thread_router.resolve_chat_id(user_id, thread_id)
+    state.msg_id = await _relay_output(
+        client, chat_id, thread_id, tail, msg_id=state.msg_id
+    )
+
+
 async def check_passive_shell_output(
     client: TelegramClient,
     user_id: int,
     thread_id: int,
     window_id: str,
     rendered_text: str,
+    *,
+    pane_current_command: str = "",
 ) -> None:
     """Check for new shell output.
 
@@ -474,6 +506,10 @@ async def check_passive_shell_output(
     Uses ``rendered_text`` (cheap, from pyte) for change detection, then
     ``_capture_with_scrollback`` for reliable output extraction so that
     command echoes scrolled off the visible pane are still found.
+
+    When ``pane_current_command`` is a non-shell interactive program (e.g.
+    ``agent`` for Cursor CLI), falls back to raw terminal relay so the user
+    sees the program's output even without prompt markers.
     """
     text_hash = hash(rendered_text)
     state = _shell_monitor_state.setdefault(window_id, _ShellMonitorState())
@@ -483,7 +519,16 @@ async def check_passive_shell_output(
     state.last_text_hash = text_hash
 
     if not _has_markers_in_tail(rendered_text):
-        if not (state.last_command_echo and state.msg_id is not None):
+        # Lazy: shell_capture ↔ polling_state cycle through window_tick apply path
+        from ..polling.polling_types import SHELL_COMMANDS
+
+        cmd = pane_current_command.strip().rsplit("/", 1)[-1].lstrip("-")
+        is_interactive_app = bool(cmd) and cmd not in SHELL_COMMANDS
+        if is_interactive_app:
+            await _relay_raw_output(
+                client, user_id, thread_id, window_id, state, rendered_text
+            )
+        elif not (state.last_command_echo and state.msg_id is not None):
             _reset_monitor(state)
         return
 

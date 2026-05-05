@@ -635,8 +635,7 @@ class TestClearSeenStatus:
 
 
 class TestTransitionToIdle:
-    async def test_sends_idle_text(self) -> None:
-        from ccgram.handlers.callback_data import IDLE_STATUS_TEXT
+    async def test_suppresses_bare_idle_text(self) -> None:
         from ccgram.handlers.polling.window_tick import _transition_to_idle
 
         bot = AsyncMock(spec=Bot)
@@ -650,7 +649,25 @@ class TestTransitionToIdle:
             mock_time.monotonic.return_value = 100.0
             await _transition_to_idle(bot, 1, "@0", 42, -100, "project", "normal")
         mock_enqueue.assert_called_once()
-        assert mock_enqueue.call_args[0][3] == IDLE_STATUS_TEXT
+        assert mock_enqueue.call_args[0][3] is None
+        assert mock_enqueue.call_args[1]["thread_id"] == 42
+
+    async def test_sends_enriched_idle_text_when_tasks_available(self) -> None:
+        from ccgram.claude_task_state import IDLE_STATUS_TEXT, claude_task_state
+        from ccgram.handlers.polling.window_tick import _transition_to_idle
+
+        bot = AsyncMock(spec=Bot)
+        enriched = f"{IDLE_STATUS_TEXT}\nLast: writing tests"
+        with (
+            patch("ccgram.handlers.polling.window_tick.apply.update_topic_emoji"),
+            patch(
+                "ccgram.handlers.polling.window_tick.apply.enqueue_status_update"
+            ) as mock_enqueue,
+            patch.object(claude_task_state, "format_completion_text", return_value=enriched),
+        ):
+            await _transition_to_idle(bot, 1, "@0", 42, -100, "project", "normal")
+        mock_enqueue.assert_called_once()
+        assert mock_enqueue.call_args[0][3] == enriched
         assert mock_enqueue.call_args[1]["thread_id"] == 42
 
     @pytest.mark.parametrize("mode", ["muted", "errors_only"])
