@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 
 import structlog
 
-from ..claude_task_state import classify_wait_message, claude_task_state
+from ..claude_task_state import IDLE_STATUS_TEXT, classify_wait_message, claude_task_state
 from ..providers.base import HookEvent
 from ..session_lifecycle import session_lifecycle
 from ..telegram_client import TelegramClient
@@ -199,11 +199,15 @@ async def _handle_stop(event: HookEvent, client: TelegramClient) -> None:
         if notif_mode in ("muted", "errors_only"):
             status_text = None
         else:
-            status_text = claude_task_state.format_completion_text(
+            completion_text = claude_task_state.format_completion_text(
                 window_id, num_turns=num_turns
             )
-            if summary and status_text:
-                status_text = status_text.replace("✓ Ready", f"✓ Done — {summary}", 1)
+            if summary and completion_text:
+                status_text = completion_text.replace(IDLE_STATUS_TEXT, f"✓ Done — {summary}", 1)
+            elif completion_text == IDLE_STATUS_TEXT:
+                status_text = None  # suppress bare ✓ Ready (no tasks, no summary)
+            else:
+                status_text = completion_text
         await enqueue_status_update(
             client, user_id, window_id, status_text, thread_id=thread_id
         )
