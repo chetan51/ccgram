@@ -317,7 +317,7 @@ async def handle_new_window(event: NewWindowEvent, client: TelegramClient) -> No
 
     await _auto_detect_provider(event.window_id)
 
-    topic_name = event.window_name or Path(event.cwd).name or event.window_id
+    topic_name = event.window_name or event.window_id
     if await _rebind_existing_topic_by_name(event, client, topic_name):
         return
 
