@@ -516,6 +516,29 @@ async def _wait_for_shell_ready(window_id: str, *, attempts: int = 15) -> None:
         await asyncio.sleep(0.2)
 
 
+async def _wait_for_shell_prompt(window_id: str, *, timeout: float = 5.0) -> None:
+    """Wait for init_command (e.g. ``source ~/.zshrc``) to finish executing.
+
+    Polls ``capture_pane`` until the last visible line ends with a bare shell
+    prompt character (%, $, ❯, #).  The CCGram-marked prompt ends in '⌘N⌘ '
+    (no trailing bare %) so this correctly waits through the source run that
+    resets PROMPT back to the user's original form.  Falls through after
+    *timeout* seconds so a slow profile never blocks indefinitely.
+    """
+    import re
+
+    prompt_re = re.compile(r"[%$❯#]\s*$")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        raw = await tmux_manager.capture_pane(window_id)
+        if raw:
+            last = raw.rstrip().splitlines()[-1] if raw.rstrip() else ""
+            if prompt_re.search(last):
+                return
+        await asyncio.sleep(0.2)
+
+
 async def _accept_yolo_confirmation(window_id: str, *, timeout: float = 8.0) -> bool:
     """Detect and accept Claude Code's bypass permissions confirmation prompt.
 
@@ -622,6 +645,7 @@ async def create_window_for_topic(
         await ensure_setup(created_wid, "auto")
         if init_command:
             await tmux_manager.send_keys(created_wid, init_command, raw=True)
+            await _wait_for_shell_prompt(created_wid)
 
     _try_install_messaging_skill(provider_name, selected_path)
 
