@@ -489,6 +489,171 @@ class TestCheckPassiveShellOutput:
         assert state.last_command_echo == "ccgram:0❯ ls -al"
 
 
+@pytest.mark.usefixtures("_clean_monitor_state")
+class TestInteractiveAppRelay:
+    @pytest.mark.asyncio()
+    async def test_relays_output_when_no_markers_and_interactive_app(self) -> None:
+        from ccgram.handlers.shell.shell_capture import (
+            _shell_monitor_state,
+            check_passive_shell_output,
+        )
+
+        bot = AsyncMock(spec=Bot)
+        mock_sent = MagicMock()
+        mock_sent.message_id = 300
+        plan_text = "Plan:\n1. Create main.py\n2. Add tests\n3. Run the suite"
+        scrollback = f"$ cursor agent\n{plan_text}\nProceed? [Y/n]"
+
+        with (
+            patch(
+                f"{_MOD}.rate_limit_send_message",
+                new_callable=AsyncMock,
+                return_value=mock_sent,
+            ) as mock_send,
+            patch(f"{_MOD}.thread_router") as mock_sm,
+            patch(
+                f"{_MOD}._capture_with_scrollback",
+                new_callable=AsyncMock,
+                return_value=scrollback,
+            ),
+        ):
+            mock_sm.resolve_chat_id.return_value = -100
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", plan_text, pane_current_command="agent"
+            )
+
+        mock_send.assert_called_once()
+        sent_text = mock_send.call_args[0][2]
+        assert "Plan:" in sent_text
+        state = _shell_monitor_state["@0"]
+        assert state.msg_id == 300
+
+    @pytest.mark.asyncio()
+    async def test_uses_scrollback_not_just_visible_screen(self) -> None:
+        from ccgram.handlers.shell.shell_capture import check_passive_shell_output
+
+        bot = AsyncMock(spec=Bot)
+        mock_sent = MagicMock()
+        mock_sent.message_id = 301
+        visible_only = "Proceed? [Y/n]"
+        full_scrollback = "Plan:\n1. Do stuff\n\nProceed? [Y/n]"
+
+        with (
+            patch(
+                f"{_MOD}.rate_limit_send_message",
+                new_callable=AsyncMock,
+                return_value=mock_sent,
+            ) as mock_send,
+            patch(f"{_MOD}.thread_router") as mock_sm,
+            patch(
+                f"{_MOD}._capture_with_scrollback",
+                new_callable=AsyncMock,
+                return_value=full_scrollback,
+            ),
+        ):
+            mock_sm.resolve_chat_id.return_value = -100
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", visible_only, pane_current_command="cursor"
+            )
+
+        mock_send.assert_called_once()
+        sent_text = mock_send.call_args[0][2]
+        assert "Plan:" in sent_text
+
+    @pytest.mark.asyncio()
+    async def test_skips_relay_when_pane_cmd_is_shell(self) -> None:
+        from ccgram.handlers.shell.shell_capture import check_passive_shell_output
+
+        bot = AsyncMock(spec=Bot)
+        pane = "Some output without markers"
+
+        with (
+            patch(
+                f"{_MOD}.rate_limit_send_message",
+                new_callable=AsyncMock,
+            ) as mock_send,
+            patch(
+                f"{_MOD}._capture_with_scrollback",
+                new_callable=AsyncMock,
+                return_value=pane,
+            ),
+        ):
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", pane, pane_current_command="bash"
+            )
+
+        mock_send.assert_not_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_edits_in_place_on_content_change(self) -> None:
+        from ccgram.handlers.shell.shell_capture import (
+            _shell_monitor_state,
+            check_passive_shell_output,
+        )
+
+        bot = AsyncMock(spec=Bot)
+        mock_sent = MagicMock()
+        mock_sent.message_id = 302
+        step1 = "Plan:\n1. Create file"
+        step2 = "Plan:\n1. Create file\n2. Add tests"
+
+        with (
+            patch(
+                f"{_MOD}.rate_limit_send_message",
+                new_callable=AsyncMock,
+                return_value=mock_sent,
+            ),
+            patch(f"{_MOD}.edit_with_fallback", new_callable=AsyncMock) as mock_edit,
+            patch(f"{_MOD}.thread_router") as mock_sm,
+            patch(
+                f"{_MOD}._capture_with_scrollback",
+                new_callable=AsyncMock,
+                side_effect=[step1, step2],
+            ),
+        ):
+            mock_sm.resolve_chat_id.return_value = -100
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", step1, pane_current_command="agent"
+            )
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", step2, pane_current_command="agent"
+            )
+
+        assert _shell_monitor_state["@0"].msg_id == 302
+        mock_edit.assert_called_once()
+        edited_text = mock_edit.call_args[0][3]
+        assert "2. Add tests" in edited_text
+
+    @pytest.mark.asyncio()
+    async def test_falls_back_to_rendered_text_when_scrollback_fails(self) -> None:
+        from ccgram.handlers.shell.shell_capture import check_passive_shell_output
+
+        bot = AsyncMock(spec=Bot)
+        mock_sent = MagicMock()
+        mock_sent.message_id = 303
+        visible = "Plan:\n1. Do stuff"
+
+        with (
+            patch(
+                f"{_MOD}.rate_limit_send_message",
+                new_callable=AsyncMock,
+                return_value=mock_sent,
+            ) as mock_send,
+            patch(f"{_MOD}.thread_router") as mock_sm,
+            patch(
+                f"{_MOD}._capture_with_scrollback",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            mock_sm.resolve_chat_id.return_value = -100
+            await check_passive_shell_output(
+                bot, 1, 42, "@0", visible, pane_current_command="cursor"
+            )
+
+        mock_send.assert_called_once()
+
+
 class TestClearShellMonitorState:
     def test_clear_removes_state(self) -> None:
         from ccgram.handlers.shell.shell_capture import (

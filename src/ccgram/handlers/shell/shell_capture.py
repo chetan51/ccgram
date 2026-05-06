@@ -461,7 +461,7 @@ def _has_markers_in_tail(rendered_text: str) -> bool:
     return any(match_prompt(line.lstrip()) for line in tail)
 
 
-_RELAY_TAIL_LINES = 40
+_RELAY_TAIL_LINES = 100
 
 
 async def _relay_raw_output(
@@ -470,15 +470,18 @@ async def _relay_raw_output(
     thread_id: int,
     window_id: str,
     state: "_ShellMonitorState",
-    rendered_text: str,
+    content: str,
 ) -> None:
     """Relay raw terminal content for interactive programs (e.g. Cursor CLI).
 
     Used when no prompt markers are present and the foreground process is not
-    a known shell. Sends/edits the tail of the rendered pane text so the user
-    sees the agent's latest output without needing prompt markers.
+    a known shell. Sends/edits the tail of the content so the user sees the
+    agent's latest output without needing prompt markers.
+
+    ``content`` should be the scrollback capture when available so that plan
+    text that has already scrolled off the visible screen is still relayed.
     """
-    lines = rendered_text.rstrip().splitlines()
+    lines = content.rstrip().splitlines()
     if not lines:
         return
     tail = "\n".join(lines[-_RELAY_TAIL_LINES:])
@@ -509,7 +512,9 @@ async def check_passive_shell_output(
 
     When ``pane_current_command`` is a non-shell interactive program (e.g.
     ``agent`` for Cursor CLI), falls back to raw terminal relay so the user
-    sees the program's output even without prompt markers.
+    sees the program's output even without prompt markers. Uses scrollback
+    capture (same as the marker path) so plan text that scrolled off the
+    visible screen before the next poll cycle is still relayed.
     """
     text_hash = hash(rendered_text)
     state = _shell_monitor_state.setdefault(window_id, _ShellMonitorState())
@@ -525,8 +530,17 @@ async def check_passive_shell_output(
         cmd = pane_current_command.strip().rsplit("/", 1)[-1].lstrip("-")
         is_interactive_app = bool(cmd) and cmd not in SHELL_COMMANDS
         if is_interactive_app:
+            # Use scrollback so plan text that already scrolled off the
+            # visible screen is still captured (plan mode often generates
+            # output and transitions to an approval prompt in < 1 poll cycle).
+            scrollback = await _capture_with_scrollback(window_id)
             await _relay_raw_output(
-                client, user_id, thread_id, window_id, state, rendered_text
+                client,
+                user_id,
+                thread_id,
+                window_id,
+                state,
+                scrollback if scrollback else rendered_text,
             )
         elif not (state.last_command_echo and state.msg_id is not None):
             _reset_monitor(state)
